@@ -3,6 +3,13 @@ import torch
 import torch as th
 import torch.nn as nn
 
+# Import for modifying control net architecture
+
+from cldm.fusion_module import MultiControlFusion
+from cldm.lrci_adapter import LRCIAdapter
+from cldm.dynamic_scheduler import DynamicControlScheduler
+
+
 from ldm.modules.diffusionmodules.util import (
     conv_nd,
     linear,
@@ -20,6 +27,15 @@ from ldm.models.diffusion.ddim import DDIMSampler
 
 
 class ControlledUnetModel(UNetModel):
+
+    def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+
+    # -------- AMCF-LRCI Modules --------
+    self.fusion_module = MultiControlFusion(320)
+    self.lrci_adapter = LRCIAdapter(320)
+    self.control_scheduler = DynamicControlScheduler()
+    
     def forward(self, x, timesteps=None, context=None, control=None, only_mid_control=False, **kwargs):
         hs = []
         with torch.no_grad():
@@ -31,14 +47,42 @@ class ControlledUnetModel(UNetModel):
                 hs.append(h)
             h = self.middle_block(h, emb, context)
 
-        if control is not None:
-            h += control.pop()
+        # if control is not None:
+        #     h += control.pop()
 
+        if control is not None:
+
+            # -------- AMCF-LRCI modification --------
+
+            # fuse multiple control features
+            fused_control = self.fusion_module(control)
+
+            # low-rank injection
+            delta = self.lrci_adapter(fused_control)
+
+            # dynamic control strength
+            weight = self.control_scheduler.weight(timesteps)
+
+            h = h + weight * delta
+            
         for i, module in enumerate(self.output_blocks):
             if only_mid_control or control is None:
                 h = torch.cat([h, hs.pop()], dim=1)
             else:
-                h = torch.cat([h, hs.pop() + control.pop()], dim=1)
+                # h = torch.cat([h, hs.pop() + control.pop()], dim=1)
+                # -------- AMCF-LRCI modification --------
+
+                # fuse multiple control features
+                fused_control = self.fusion_module(torch.stack(control))
+
+                # low-rank control injection
+                delta = self.lrci_adapter(fused_control)
+
+                # dynamic control strength
+                weight = self.control_scheduler.weight(timesteps)
+
+                # apply control to skip connection
+                h = torch.cat([h, hs.pop() + weight * delta], dim=1)
             h = module(h, emb, context)
 
         h = h.type(x.dtype)
@@ -413,13 +457,32 @@ class ControlLDM(LatentDiffusion):
         samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size, shape, cond, verbose=False, **kwargs)
         return samples, intermediates
 
+    # def configure_optimizers(self):
+    #     lr = self.learning_rate
+    #     params = list(self.control_model.parameters())
+    #     if not self.sd_locked:
+    #         params += list(self.model.diffusion_model.output_blocks.parameters())
+    #         params += list(self.model.diffusion_model.out.parameters())
+    #     opt = torch.optim.AdamW(params, lr=lr)
+    #     return opt
+
+    # new MODIFIED FUNCTION TO TRAIN NEW MODULES
     def configure_optimizers(self):
+
         lr = self.learning_rate
-        params = list(self.control_model.parameters())
-        if not self.sd_locked:
-            params += list(self.model.diffusion_model.output_blocks.parameters())
-            params += list(self.model.diffusion_model.out.parameters())
+
+        params = []
+
+        # Train AMCF-LRCI modules only
+        params += list(self.model.diffusion_model.fusion_module.parameters())
+        params += list(self.model.diffusion_model.lrci_adapter.parameters())
+
+        # If scheduler has learnable parameters
+        if hasattr(self.model.diffusion_model.control_scheduler, "parameters"):
+            params += list(self.model.diffusion_model.control_scheduler.parameters())
+
         opt = torch.optim.AdamW(params, lr=lr)
+
         return opt
 
     def low_vram_shift(self, is_diffusing):
