@@ -29,12 +29,12 @@ from ldm.models.diffusion.ddim import DDIMSampler
 class ControlledUnetModel(UNetModel):
 
     def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
-    # -------- AMCF-LRCI Modules --------
-    self.fusion_module = MultiControlFusion(320)
-    self.lrci_adapter = LRCIAdapter(320)
-    self.control_scheduler = DynamicControlScheduler()
+        # -------- AMCF-LRCI Modules --------
+        self.fusion_module = MultiControlFusion(320)
+        self.lrci_adapter = LRCIAdapter(320)
+        self.control_scheduler = DynamicControlScheduler()
     
     def forward(self, x, timesteps=None, context=None, control=None, only_mid_control=False, **kwargs):
         hs = []
