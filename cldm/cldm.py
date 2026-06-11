@@ -472,22 +472,23 @@ class ControlLDM(LatentDiffusion):
 
     # new MODIFIED FUNCTION TO TRAIN NEW MODULES
     def configure_optimizers(self):
+    lr = self.learning_rate
+    params = []
 
-        lr = self.learning_rate
+    # 1. Control encoder (MUST train — this processes the hint image)
+    params += list(self.control_model.parameters())
 
-        params = []
+    # 2. Your new modules in the UNet decoder
+    params += list(self.model.diffusion_model.fusion_modules.parameters())
+    params += list(self.model.diffusion_model.lrci_adapters.parameters())
 
-        # Train AMCF-LRCI modules only
-        params += list(self.model.diffusion_model.fusion_module.parameters())
-        params += list(self.model.diffusion_model.lrci_adapter.parameters())
+    # 3. SD UNet output blocks (only if sd_locked=False)
+    if not self.sd_locked:
+        params += list(self.model.diffusion_model.output_blocks.parameters())
+        params += list(self.model.diffusion_model.out.parameters())
 
-        # If scheduler has learnable parameters
-        if hasattr(self.model.diffusion_model.control_scheduler, "parameters"):
-            params += list(self.model.diffusion_model.control_scheduler.parameters())
-
-        opt = torch.optim.AdamW(params, lr=lr)
-
-        return opt
+    opt = torch.optim.AdamW(params, lr=lr)
+    return opt
 
     def low_vram_shift(self, is_diffusing):
         if is_diffusing:
