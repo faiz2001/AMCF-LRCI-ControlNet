@@ -15,12 +15,8 @@ for ch in [320, 640, 1280]:
     adapter = LRCIAdapter(ch, rank=4)
     out = adapter(x)
     assert out.shape == x.shape, f"Shape mismatch at ch={ch}"
-    diff = (out - x).abs().mean().item()
-    # B is zero-initialized (correct LoRA behavior) so diff=0 at init is EXPECTED
-# Just verify forward pass runs without crash and shape is correct
-    print(f"   ch={ch:4d} | output shape: {list(out.shape)} | params={params} | OK (zero-init is correct)")
     params = sum(p.numel() for p in adapter.parameters())
-    print(f"   ch={ch:4d} | output shape: {list(out.shape)} | diff={diff:.6f} | params={params}")
+    print(f"   ch={ch:4d} | output shape: {list(out.shape)} | params={params} | OK")
 
 # ── Test 2: Fusion Module ─────────────────────────
 print("\n[2] Testing MultiControlFusion (single input = passthrough)...")
@@ -38,7 +34,6 @@ for t in [0, 250, 500, 750, 999]:
     w = scheduler.weight(t)
     print(f"   t={t:4d} | weight = {w.item():.6f}")
 
-# Verify weight decreases as t increases
 w0   = scheduler.weight(0).item()
 w500 = scheduler.weight(500).item()
 w999 = scheduler.weight(999).item()
@@ -64,7 +59,6 @@ print(f"   Fusion modules total params : {total_fusion:>10,}")
 print(f"   LRCI adapters total params  : {total_lrci:>10,}")
 print(f"   All new module params       : {total_new:>10,}")
 
-# Original ControlNet trainable params (approximate)
 original_controlnet_params = 361000000
 reduction_pct = (1 - total_new / original_controlnet_params) * 100
 print(f"   Reduction vs full ControlNet: {reduction_pct:.1f}%")
@@ -78,8 +72,7 @@ fusion_modules = nn.ModuleList([MultiControlFusion(ch) for ch in ctrl_channels_l
 lrci_adapters  = nn.ModuleList([LRCIAdapter(ch) for ch in ctrl_channels_list])
 scheduler      = DynamicControlScheduler()
 
-# Simulate control list (what ControlNet encoder outputs)
-controls = [torch.randn(2, ch, max(4, 64 // (2**min(i//4, 3))), 
+controls = [torch.randn(2, ch, max(4, 64 // (2**min(i//4, 3))),
                                 max(4, 64 // (2**min(i//4, 3))))
             for i, ch in enumerate(ctrl_channels_list)]
 
