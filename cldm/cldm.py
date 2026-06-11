@@ -31,62 +31,66 @@ class ControlledUnetModel(UNetModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # -------- AMCF-LRCI Modules --------
-        self.fusion_module = MultiControlFusion(320)
-        self.lrci_adapter = LRCIAdapter(320)
+        # Channel dims at each level in SD 1.5 UNet
+        # These match the actual skip connection channels
+        self.ctrl_channels = [320, 320, 320, 320, 640, 640, 640, 1280, 1280, 1280, 1280, 1280, 1280]
+
+        # One fusion module per control level (13 total)
+        self.fusion_modules = nn.ModuleList([
+            MultiControlFusion(ch) for ch in self.ctrl_channels
+        ])
+
+        # One LRCI adapter per control level
+        self.lrci_adapters = nn.ModuleList([
+            LRCIAdapter(ch) for ch in self.ctrl_channels
+        ])
+
         self.control_scheduler = DynamicControlScheduler()
     
-    def forward(self, x, timesteps=None, context=None, control=None, only_mid_control=False, **kwargs):
-        hs = []
-        with torch.no_grad():
-            t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
-            emb = self.time_embed(t_emb)
-            h = x.type(self.dtype)
-            for module in self.input_blocks:
-                h = module(h, emb, context)
-                hs.append(h)
-            h = self.middle_block(h, emb, context)
-
-        # if control is not None:
-        #     h += control.pop()
-
-        if control is not None:
-
-            # -------- AMCF-LRCI modification --------
-
-            # fuse multiple control features
-            fused_control = self.fusion_module(control)
-
-            # low-rank injection
-            delta = self.lrci_adapter(fused_control)
-
-            # dynamic control strength
-            weight = self.control_scheduler.weight(timesteps)
-
-            h = h + weight * delta
-            
-        for i, module in enumerate(self.output_blocks):
-            if only_mid_control or control is None:
-                h = torch.cat([h, hs.pop()], dim=1)
-            else:
-                # h = torch.cat([h, hs.pop() + control.pop()], dim=1)
-                # -------- AMCF-LRCI modification --------
-
-                # fuse multiple control features
-                fused_control = self.fusion_module(torch.stack(control))
-
-                # low-rank control injection
-                delta = self.lrci_adapter(fused_control)
-
-                # dynamic control strength
-                weight = self.control_scheduler.weight(timesteps)
-
-                # apply control to skip connection
-                h = torch.cat([h, hs.pop() + weight * delta], dim=1)
+    def forward(self, x, timesteps=None, context=None, control=None, 
+            only_mid_control=False, **kwargs):
+    hs = []
+    with torch.no_grad():
+        t_emb = timestep_embedding(timesteps, self.model_channels, 
+                                   repeat_only=False)
+        emb = self.time_embed(t_emb)
+        h = x.type(self.dtype)
+        for module in self.input_blocks:
             h = module(h, emb, context)
+            hs.append(h)
+        h = self.middle_block(h, emb, context)
 
-        h = h.type(x.dtype)
-        return self.out(h)
+    # Scheduler weight — fixed shape for broadcasting
+    # timesteps: (B,) → weight: (B, 1, 1, 1)
+    weight = self.control_scheduler.weight(timesteps[0]).to(x.device)
+    weight = weight.view(1, 1, 1, 1)  # broadcast over B, C, H, W
+
+    # Apply middle control
+    if control is not None:
+        mid_ctrl  = control[-1]                        # (B, 1280, 8, 8)
+        fused     = self.fusion_modules[-1]([mid_ctrl]) # single input list
+        delta     = self.lrci_adapters[-1](fused)
+        h = h + weight * delta
+
+    # Output blocks — zip with control signals
+    ctrl_idx = len(control) - 2  # start from second-to-last
+
+    for i, module in enumerate(self.output_blocks):
+        if only_mid_control or control is None:
+            h = torch.cat([h, hs.pop()], dim=1)
+        else:
+            skip = hs.pop()
+            ctrl = control[ctrl_idx]                        # correct level
+            fused = self.fusion_modules[ctrl_idx]([ctrl])   # single input list
+            delta = self.lrci_adapters[ctrl_idx](fused)
+            skip = skip + weight * delta
+            h = torch.cat([h, skip], dim=1)
+            ctrl_idx = max(0, ctrl_idx - 1)
+
+        h = module(h, emb, context)
+
+    h = h.type(x.dtype)
+    return self.out(h)
 
 
 class ControlNet(nn.Module):
