@@ -17,16 +17,22 @@ only_mid_control = False
 model = create_model('./models/cldm_v15.yaml').cpu()
 model.load_state_dict(load_state_dict(resume_path, location='cpu'))
 model.learning_rate = learning_rate
-model.sd_locked = sd_locked
+model.sd_locked     = sd_locked
 model.only_mid_control = only_mid_control
 
 # Dataset
 dataset    = MyDataset()
-dataloader = DataLoader(dataset, num_workers=0, batch_size=batch_size, shuffle=True)
+dataloader = DataLoader(dataset, num_workers=4, batch_size=batch_size, shuffle=True)
 
 # Logger and Trainer
 logger  = ImageLogger(batch_frequency=logger_freq)
-trainer = pl.Trainer(gpus=1, precision=32, callbacks=[logger])
+trainer = pl.Trainer(
+    accelerator='gpu',
+    devices=1,
+    precision=32,
+    callbacks=[logger],
+    max_epochs=10
+)
 
 # Train!
 trainer.fit(model, dataloader)
