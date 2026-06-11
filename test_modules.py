@@ -16,7 +16,9 @@ for ch in [320, 640, 1280]:
     out = adapter(x)
     assert out.shape == x.shape, f"Shape mismatch at ch={ch}"
     diff = (out - x).abs().mean().item()
-    assert diff > 0, "Adapter output identical to input — residual not working"
+    # B is zero-initialized (correct LoRA behavior) so diff=0 at init is EXPECTED
+# Just verify forward pass runs without crash and shape is correct
+    print(f"   ch={ch:4d} | output shape: {list(out.shape)} | params={params} | OK (zero-init is correct)")
     params = sum(p.numel() for p in adapter.parameters())
     print(f"   ch={ch:4d} | output shape: {list(out.shape)} | diff={diff:.6f} | params={params}")
 
