@@ -475,19 +475,8 @@ class ControlLDM(LatentDiffusion):
     def configure_optimizers(self):
         lr     = self.learning_rate
         params = []
-
-        # 1. Control encoder — MUST train
-        params += list(self.control_model.parameters())
-
-        # 2. New AMCF-LRCI modules in UNet decoder
         params += list(self.model.diffusion_model.fusion_modules.parameters())
         params += list(self.model.diffusion_model.lrci_adapters.parameters())
-
-        # 3. UNet output blocks — only if sd_locked=False
-        if not self.sd_locked:
-            params += list(self.model.diffusion_model.output_blocks.parameters())
-            params += list(self.model.diffusion_model.out.parameters())
-
         opt = torch.optim.AdamW(params, lr=lr)
         return opt
 

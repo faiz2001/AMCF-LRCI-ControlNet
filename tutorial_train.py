@@ -5,34 +5,34 @@ from tutorial_dataset import MyDataset
 from cldm.logger import ImageLogger
 from cldm.model import create_model, load_state_dict
 
-# Configs
-resume_path      = './models/control_sd15_ini.ckpt'
+resume_path      = './models/control_canny_init.ckpt'
 batch_size       = 4
 logger_freq      = 300
 learning_rate    = 1e-5
 sd_locked        = True
 only_mid_control = False
 
-# Load model
 model = create_model('./models/cldm_v15.yaml').cpu()
 model.load_state_dict(load_state_dict(resume_path, location='cpu'))
-model.learning_rate = learning_rate
-model.sd_locked     = sd_locked
+model.learning_rate    = learning_rate
+model.sd_locked        = sd_locked
 model.only_mid_control = only_mid_control
 
-# Dataset
+for p in model.parameters():
+    p.requires_grad = False
+for p in model.model.diffusion_model.fusion_modules.parameters():
+    p.requires_grad = True
+for p in model.model.diffusion_model.lrci_adapters.parameters():
+    p.requires_grad = True
+
+trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+total     = sum(p.numel() for p in model.parameters())
+print("[THESIS] Trainable: {:,} / Total: {:,} ({:.4f}%)".format(trainable, total, 100*trainable/total))
+
 dataset    = MyDataset()
 dataloader = DataLoader(dataset, num_workers=4, batch_size=batch_size, shuffle=True)
 
-# Logger and Trainer
 logger  = ImageLogger(batch_frequency=logger_freq)
-trainer = pl.Trainer(
-    accelerator='gpu',
-    devices=1,
-    precision=32,
-    callbacks=[logger],
-    max_epochs=10
-)
+trainer = pl.Trainer(accelerator='gpu', devices=1, precision=32, callbacks=[logger], max_epochs=10)
 
-# Train!
 trainer.fit(model, dataloader)
